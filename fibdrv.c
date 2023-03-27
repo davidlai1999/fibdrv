@@ -6,6 +6,7 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
+#include <linux/slab.h>
 
 MODULE_LICENSE("Dual MIT/GPL");
 MODULE_AUTHOR("National Cheng Kung University, Taiwan");
@@ -17,7 +18,7 @@ MODULE_VERSION("0.1");
 /* MAX_LENGTH is set to 92 because
  * ssize_t can't fit the number > 92
  */
-#define MAX_LENGTH 92
+#define MAX_LENGTH 100
 
 static dev_t fib_dev = 0;
 static struct cdev *fib_cdev;
@@ -37,6 +38,79 @@ static long long fib_sequence(long long k)
     }
 
     return f[k];
+}
+
+static int findLSB(const char *a)
+{
+    int count = 0;
+    for (; a[count] != '\0'; count++)
+        ;
+    return count;
+}
+
+static void reverse(char *a)
+{
+    int last = findLSB(a) - 1, first = 0;
+    while (first < last) {
+        a[first] = a[first] ^ a[last];
+        a[last] = a[first] ^ a[last];
+        a[first] = a[first] ^ a[last];
+        ++first;
+        --last;
+    }
+}
+
+static void add(char *data_a, char *data_b, char *out)
+{
+    int count, sum, carry = 0;
+
+    for (count = 0; count < findLSB(data_a); count++) {
+        sum = (data_a[count] - '0') + (data_b[count] - '0') + carry;
+        out[count] = '0' + sum % 10;
+        carry = sum / 10;
+    }
+    for (; count < findLSB(data_b); count++) {
+        sum = (data_b[count] - '0') + carry;
+        out[count] = '0' + sum % 10;
+        carry = sum / 10;
+    }
+
+    if (carry)
+        out[count] = '0' + carry;
+}
+
+static void swap_string(char *data_a, char *data_b, char *data_c)
+{
+    char temp[128] = "0";
+    strncpy(temp, data_a, 128);
+    strncpy(data_a, data_b, 128);
+    strncpy(data_b, data_c, 128);
+    strncpy(data_c, temp, 128);
+}
+
+static ssize_t fib_sequence_string(long long k, char *buf)
+{
+    /* FIXME: C99 variable-length array (VLA) is not allowed in Linux kernel. */
+    char f1[128] = "0";
+    char f2[128] = "1";
+    char ans[128] = "0";
+
+    reverse(f1);
+    reverse(f2);
+
+    for (int i = 2; i <= k; i++) {
+        add(f1, f2, ans);
+        swap_string(ans, f1, f2);
+    }
+
+    reverse(f2);
+
+    int check = copy_to_user(buf, f2, 128);
+    if (check) {
+        printk("Copy_to_user fail.");
+        return -1;
+    }
+    return 128;
 }
 
 static int fib_open(struct inode *inode, struct file *file)
@@ -60,7 +134,7 @@ static ssize_t fib_read(struct file *file,
                         size_t size,
                         loff_t *offset)
 {
-    return (ssize_t) fib_sequence(*offset);
+    return (ssize_t) fib_sequence_string(*offset, buf);
 }
 
 /* write operation is skipped */
